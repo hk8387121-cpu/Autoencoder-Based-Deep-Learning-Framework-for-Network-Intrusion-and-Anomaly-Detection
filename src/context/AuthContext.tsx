@@ -19,22 +19,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        setUser({
-          id: firebaseUser.uid,
-          name: firebaseUser.displayName || 'User',
-          email: firebaseUser.email || '',
-          role: firebaseUser.email?.includes('admin') ? 'Admin' : 'Security Analyst',
-          mfaEnabled: false,
-        });
-      } else {
-        setUser(null);
-      }
+    try {
+      const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+        if (firebaseUser) {
+          setUser({
+            id: firebaseUser.uid,
+            name: firebaseUser.displayName || 'User',
+            email: firebaseUser.email || '',
+            role: firebaseUser.email?.includes('admin') ? 'Admin' : 'Security Analyst',
+            mfaEnabled: false,
+          });
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn("Firebase Auth unavailable. Falling back to offline mode.");
       setLoading(false);
-    });
-
-    return () => unsubscribe();
+      return () => {};
+    }
   }, []);
 
   const login = async (email: string, mfaCode?: string) => {
@@ -60,6 +65,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const googleLogin = async () => {
     try {
+      if (!googleProvider || Object.keys(googleProvider).length === 0) {
+        throw new Error("Google Provider not initialized. Running in offline mode.");
+      }
       googleProvider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
@@ -68,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       console.error('Error signing in with Google', error);
-      throw error;
+      alert('Authentication unavailable: ' + (error.message || 'Unknown error'));
     }
   };
 

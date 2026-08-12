@@ -26,7 +26,7 @@ export default function Dashboard() {
     });
 
     const interval = setInterval(() => {
-      if (!modelStatus?.is_trained) return;
+      if (!modelStatus?.is_trained && !backendError) return;
       
       const dummyFeatures = {
         duration: Math.random() > 0.9 ? Math.floor(Math.random() * 100) : 0,
@@ -40,9 +40,7 @@ export default function Dashboard() {
         label: 'normal'
       };
 
-      predictSample(dummyFeatures).then(result => {
-        const { is_anomaly, reconstruction_error, threshold } = result;
-        
+      const updateDashboard = (is_anomaly: boolean, reconstruction_error: number, threshold: number) => {
         setData((currentData) => {
           const newData = currentData.length >= 20 ? [...currentData.slice(1)] : [...currentData];
           
@@ -69,11 +67,24 @@ export default function Dashboard() {
 
           return newData;
         });
+      };
+
+      if (backendError) {
+        // Demo Mode - Simulate Autoencoder Backend
+        const is_anomaly = Math.random() > 0.85;
+        const reconstruction_error = is_anomaly ? 0.15 + Math.random() * 0.2 : 0.02 + Math.random() * 0.05;
+        updateDashboard(is_anomaly, reconstruction_error, 0.1);
+        return;
+      }
+
+      predictSample(dummyFeatures).then(result => {
+        const { is_anomaly, reconstruction_error, threshold } = result;
+        updateDashboard(is_anomaly, reconstruction_error, threshold);
       }).catch(err => console.error(err));
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [modelStatus?.is_trained]);
+  }, [modelStatus?.is_trained, backendError]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -93,9 +104,17 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 flex flex-col h-full">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">Real-Time Metrics</h1>
-        <p className="text-slate-400 text-sm">Monitoring network traffic through Autoencoder anomaly detection.</p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">Real-Time Metrics</h1>
+          <p className="text-slate-400 text-sm">Monitoring network traffic through Autoencoder anomaly detection.</p>
+        </div>
+        {backendError && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
+            <ServerCrash className="w-4 h-4" />
+            {backendError} (Demo Mode)
+          </div>
+        )}
       </div>
 
       {/* Stats Grid */}

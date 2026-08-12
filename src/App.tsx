@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -48,7 +48,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <Router basename={import.meta.env.BASE_URL}>
+        <Router>
           <AppRoutes />
         </Router>
       </ThemeProvider>
