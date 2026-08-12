@@ -5,6 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/Autoencoder-Based-Deep-Learning-Framework-for-Network-Intrusion-and-Anomaly-Detection/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

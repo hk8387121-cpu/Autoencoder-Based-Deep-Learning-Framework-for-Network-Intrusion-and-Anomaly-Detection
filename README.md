@@ -60,7 +60,7 @@ The API runs on `http://127.0.0.1:8000` with interactive docs available at `http
 ### 2. Frontend (React Dashboard)
 The frontend is built with React, Vite, TailwindCSS, and Recharts.
 
-**Installation & Running**:
+**Installation & Running Locally**:
 ```bash
 # Install dependencies
 npm install
@@ -68,6 +68,11 @@ npm install
 # Start the development server
 npm run dev
 ```
+
+**Deploying to GitHub Pages**:
+1. Go to your GitHub repository settings and ensure **GitHub Pages** is enabled and set the source to **GitHub Actions**.
+2. Go to the **Variables** tab under Settings -> Secrets and variables -> Actions. Add a repository variable named `VITE_API_BASE_URL` pointing to your deployed FastAPI backend (e.g., `https://my-fastapi-backend.com/api/v1`).
+3. Push your code to the `main` branch. The included `.github/workflows/deploy.yml` will automatically build and deploy the frontend to GitHub Pages.
 
 ## API Endpoints (Backend)
 
