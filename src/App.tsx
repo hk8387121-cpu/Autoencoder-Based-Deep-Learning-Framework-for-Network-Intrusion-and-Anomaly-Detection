@@ -48,7 +48,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <Router>
+        <Router basename={import.meta.env.BASE_URL}>
           <AppRoutes />
         </Router>
       </ThemeProvider>
