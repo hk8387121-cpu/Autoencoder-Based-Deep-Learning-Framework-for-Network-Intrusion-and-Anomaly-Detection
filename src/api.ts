@@ -1,4 +1,15 @@
-const API_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://ids-autoencoder-backend.onrender.com';
+const API_URL = `${BASE_URL}/api/v1`;
+
+export const checkHealth = async () => {
+  try {
+    const res = await fetch(`${BASE_URL}/health`);
+    if (!res.ok) throw new Error('Backend not reachable');
+    return await res.json();
+  } catch (err) {
+    throw err;
+  }
+};
 
 export const checkModelStatus = async () => {
   try {
