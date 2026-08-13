@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -9,9 +10,16 @@ from ml_model import IDSAutoencoder
 
 app = FastAPI(title="IDS Deep Learning API")
 
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://hk8387121-cpu.github.io")
+ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://localhost:5173"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,13 +39,18 @@ class TrainRequest(BaseModel):
 def read_root():
     return {"status": "ok", "message": "IDS Autoencoder API is running"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
 @app.get("/api/v1/model/status")
 def model_status():
     return {
         "is_trained": model.is_trained,
-        "threshold": model.threshold if model.is_trained else None,
+        "threshold": float(model.threshold) if model.is_trained else None,
         "features": len(model.feature_columns) if model.is_trained else 0,
-        "feature_names": model.feature_columns if model.is_trained else []
+        "feature_names": model.feature_columns if model.is_trained else [],
+        "status": "Ready for inference" if model.is_trained else "Awaiting training data"
     }
 
 @app.post("/api/v1/predict")
@@ -93,4 +106,5 @@ def train_model(request: TrainRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
