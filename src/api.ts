@@ -1,11 +1,26 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://ids-autoencoder-backend.onrender.com';
 const API_URL = `${BASE_URL}/api/v1`;
 
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 30000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+};
+
 export const checkHealth = async () => {
   try {
-    const res = await fetch(`${BASE_URL}/health`);
+    const res = await fetchWithTimeout(`${BASE_URL}/health`, {}, 30000);
     if (!res.ok) throw new Error('Backend not reachable');
-    return await res.json();
+    const data = await res.json();
+    if (data.status !== 'healthy') throw new Error('Backend unhealthy');
+    return data;
   } catch (err) {
     throw err;
   }
@@ -13,7 +28,7 @@ export const checkHealth = async () => {
 
 export const checkModelStatus = async () => {
   try {
-    const res = await fetch(`${API_URL}/model/status`);
+    const res = await fetchWithTimeout(`${API_URL}/model/status`, {}, 30000);
     if (!res.ok) throw new Error('Backend not reachable');
     return await res.json();
   } catch (err) {

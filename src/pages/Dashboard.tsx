@@ -5,7 +5,7 @@ import {
 import { Activity, ShieldAlert, Wifi, ServerCrash, Loader2 } from 'lucide-react';
 import { NetworkMetric } from '../types';
 import { format } from 'date-fns';
-import { checkModelStatus, predictSample } from '../api';
+import { checkHealth, checkModelStatus, predictSample } from '../api';
 
 export default function Dashboard() {
   const [data, setData] = useState<NetworkMetric[]>([]);
@@ -16,20 +16,30 @@ export default function Dashboard() {
     uptime: '99.9%',
   });
   const [modelStatus, setModelStatus] = useState<any>(null);
-  const [backendError, setBackendError] = useState('');
+  const [backendStatus, setBackendStatus] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [isLoading, setIsLoading] = useState(true);
 
   // Fetch model status initially and periodically
   useEffect(() => {
-    const fetchStatus = () => {
-      checkModelStatus().then(status => {
-        setModelStatus(status);
-        setBackendError('');
-      }).catch(err => {
-        setBackendError('Backend not connected (Demo Mode)');
-      }).finally(() => {
+    const fetchStatus = async () => {
+      try {
+        await checkHealth();
+        setBackendStatus('online');
+        
+        try {
+          const status = await checkModelStatus();
+          setModelStatus(status);
+        } catch (err) {
+          console.error('Model status check failed:', err);
+          setModelStatus(null);
+        }
+      } catch (err) {
+        console.error('Health check failed:', err);
+        setBackendStatus('offline');
+        setModelStatus(null);
+      } finally {
         setIsLoading(false);
-      });
+      }
     };
 
     fetchStatus();
@@ -42,12 +52,12 @@ export default function Dashboard() {
     if (isLoading) return;
 
     const interval = setInterval(() => {
-      const updateDashboard = (is_anomaly: boolean, reconstruction_error: number, threshold: number) => {
+      const updateDashboard = (is_anomaly: boolean, reconstruction_error: number, threshold: number, volMultiplier = 1) => {
         setData((currentData) => {
           const newData = currentData.length >= 20 ? [...currentData.slice(1)] : [...currentData];
           
-          const normalVol = Math.floor(Math.random() * 500) + 1000;
-          const anomalousVol = is_anomaly ? Math.floor(Math.random() * 800) + 200 : Math.floor(Math.random() * 50);
+          const normalVol = Math.floor((Math.random() * 500 + 1000) * volMultiplier);
+          const anomalousVol = is_anomaly ? Math.floor((Math.random() * 800 + 200) * volMultiplier) : Math.floor((Math.random() * 50) * volMultiplier);
           
           if (is_anomaly) {
             setStats(prev => ({ ...prev, threatsDetected: prev.threatsDetected + 1 }));
@@ -71,15 +81,15 @@ export default function Dashboard() {
         });
       };
 
-      if (backendError) {
-        // Demo Mode fallback
+      if (backendStatus === 'offline') {
+        // Demo Mode fallback ONLY when offline
         const is_anomaly = Math.random() > 0.85;
         const reconstruction_error = is_anomaly ? 0.15 + Math.random() * 0.2 : 0.02 + Math.random() * 0.05;
         updateDashboard(is_anomaly, reconstruction_error, 0.1);
         return;
       }
 
-      if (modelStatus?.is_trained) {
+      if (backendStatus === 'online' && modelStatus?.is_trained) {
         // Send a request with zeroed features based on the trained model's feature names
         const features: Record<string, any> = {};
         if (modelStatus.feature_names && modelStatus.feature_names.length > 0) {
@@ -112,7 +122,7 @@ export default function Dashboard() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [isLoading, backendError, modelStatus]);
+  }, [isLoading, backendStatus, modelStatus]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -139,7 +149,7 @@ export default function Dashboard() {
         </div>
       );
     }
-    if (!backendError && modelStatus && !modelStatus.is_trained) {
+    if (backendStatus === 'online' && modelStatus && !modelStatus.is_trained) {
       return (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/80 backdrop-blur-sm z-10 rounded-2xl">
           <ShieldAlert className="w-6 h-6 text-amber-500 mb-2" />
@@ -172,7 +182,7 @@ export default function Dashboard() {
             <Loader2 className="w-4 h-4 animate-spin" />
             Connecting...
           </div>
-        ) : backendError ? (
+        ) : backendStatus === 'offline' ? (
           <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
             <ServerCrash className="w-4 h-4" />
             Backend Offline
@@ -201,7 +211,7 @@ export default function Dashboard() {
           <div key={i} className="bg-[#0f111a] border border-white/5 p-4 rounded-xl shadow-lg relative overflow-hidden group">
             <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">{stat.label}</div>
             <div className={`text-2xl font-mono mt-1 ${stat.statColor}`}>
-              {isLoading || (!backendError && !modelStatus?.is_trained) ? '-' : stat.value}
+              {isLoading || (backendStatus === 'online' && !modelStatus?.is_trained) ? '-' : stat.value}
             </div>
           </div>
         ))}
