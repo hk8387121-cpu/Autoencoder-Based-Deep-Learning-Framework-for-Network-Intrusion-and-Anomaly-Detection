@@ -9,123 +9,95 @@ import { checkHealth, checkModelStatus, predictSample } from '../api';
 
 export default function Dashboard() {
   const [data, setData] = useState<NetworkMetric[]>([]);
-  const [stats, setStats] = useState({
-    activeConnections: 0,
-    threatsDetected: 0,
-    systemLoad: 30,
-    uptime: '99.9%',
-  });
+  const [stats, setStats] = useState({ activeConnections: 0, threatsDetected: 0, systemLoad: 30, uptime: '99.9%' });
   const [modelStatus, setModelStatus] = useState<any>(null);
   const [backendStatus, setBackendStatus] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [isLoading, setIsLoading] = useState(true);
+  const [lastError, setLastError] = useState('');
 
-  // Fetch model status initially and periodically
   useEffect(() => {
+    let mounted = true;
+
     const fetchStatus = async () => {
       try {
-        await checkHealth();
+        const health = await checkHealth();
+        if (!mounted) return;
         setBackendStatus('online');
-        
+        setLastError('');
+
         try {
           const status = await checkModelStatus();
+          if (!mounted) return;
           setModelStatus(status);
         } catch (err) {
           console.error('Model status check failed:', err);
-          setModelStatus(null);
+          if (mounted) setModelStatus(null);
         }
       } catch (err) {
         console.error('Health check failed:', err);
+        if (!mounted) return;
         setBackendStatus('offline');
         setModelStatus(null);
+        setLastError(err instanceof Error ? err.message : 'Backend is waking up or unavailable');
       } finally {
-        setIsLoading(false);
+        if (mounted) setIsLoading(false);
       }
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchStatus, 30000);
+    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
-  // Poll for live predictions or generate demo data
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || backendStatus !== 'online' || !modelStatus?.is_trained) return;
 
-    const interval = setInterval(() => {
-      const updateDashboard = (is_anomaly: boolean, reconstruction_error: number, threshold: number, volMultiplier = 1) => {
-        setData((currentData) => {
-          const newData = currentData.length >= 20 ? [...currentData.slice(1)] : [...currentData];
-          
-          const normalVol = Math.floor((Math.random() * 500 + 1000) * volMultiplier);
-          const anomalousVol = is_anomaly ? Math.floor((Math.random() * 800 + 200) * volMultiplier) : Math.floor((Math.random() * 50) * volMultiplier);
-          
-          if (is_anomaly) {
-            setStats(prev => ({ ...prev, threatsDetected: prev.threatsDetected + 1 }));
-          }
+    const updateDashboard = (is_anomaly: boolean, reconstruction_error: number, threshold: number, volMultiplier = 1) => {
+      setData(currentData => {
+        const newData = currentData.length >= 20 ? [...currentData.slice(1)] : [...currentData];
+        const normalVol = Math.floor((Math.random() * 500 + 1000) * volMultiplier);
+        const anomalousVol = is_anomaly ? Math.floor((Math.random() * 800 + 200) * volMultiplier) : Math.floor((Math.random() * 50) * volMultiplier);
 
-          newData.push({
-            time: format(new Date(), 'HH:mm:ss'),
-            normalTraffic: normalVol,
-            anomalousTraffic: anomalousVol,
-            reconstructionError: reconstruction_error,
-            threshold: threshold,
-          });
-          
-          setStats(prev => ({
-            ...prev,
-            activeConnections: prev.activeConnections + normalVol + anomalousVol,
-            systemLoad: is_anomaly ? Math.min(prev.systemLoad + 15, 100) : Math.max(prev.systemLoad - 2, 30)
-          }));
-
-          return newData;
+        newData.push({
+          time: format(new Date(), 'HH:mm:ss'),
+          normalTraffic: normalVol,
+          anomalousTraffic: anomalousVol,
+          reconstructionError: reconstruction_error,
+          threshold
         });
-      };
 
-      if (backendStatus === 'offline') {
-        // Demo Mode fallback ONLY when offline
-        const is_anomaly = Math.random() > 0.85;
-        const reconstruction_error = is_anomaly ? 0.15 + Math.random() * 0.2 : 0.02 + Math.random() * 0.05;
-        updateDashboard(is_anomaly, reconstruction_error, 0.1);
-        return;
-      }
+        setStats(prev => ({
+          ...prev,
+          threatsDetected: is_anomaly ? prev.threatsDetected + 1 : prev.threatsDetected,
+          activeConnections: prev.activeConnections + normalVol + anomalousVol,
+          systemLoad: is_anomaly ? Math.min(prev.systemLoad + 15, 100) : Math.max(prev.systemLoad - 2, 30)
+        }));
+        return newData;
+      });
+    };
 
-      if (backendStatus === 'online' && modelStatus?.is_trained) {
-        // Send a request with zeroed features based on the trained model's feature names
+    const poll = async () => {
+      try {
         const features: Record<string, any> = {};
-        if (modelStatus.feature_names && modelStatus.feature_names.length > 0) {
+        if (modelStatus.feature_names?.length) {
           modelStatus.feature_names.forEach((f: string) => {
-            // Provide some random numerical data so the predict endpoint doesn't fail
             features[f] = Math.random() * 10;
           });
-        } else {
-          // Fallback if feature names aren't provided
-          Object.assign(features, {
-            duration: Math.floor(Math.random() * 100),
-            protocol_type: 'tcp',
-            service: 'http',
-            flag: 'SF',
-            src_bytes: Math.floor(Math.random() * 1000),
-            dst_bytes: Math.floor(Math.random() * 5000),
-            count: Math.floor(Math.random() * 10),
-            srv_count: Math.floor(Math.random() * 10),
-            label: 'normal'
-          });
         }
-
-        predictSample(features).then(result => {
-          const { is_anomaly, reconstruction_error, threshold } = result;
-          updateDashboard(is_anomaly, reconstruction_error, threshold);
-        }).catch(err => {
-          console.error("Live prediction error:", err);
-        });
+        const result = await predictSample(features);
+        updateDashboard(result.is_anomaly, result.reconstruction_error, result.threshold);
+      } catch (err) {
+        console.error('Live prediction error:', err);
       }
-    }, 2000);
+    };
 
+    poll();
+    const interval = setInterval(poll, 5000);
     return () => clearInterval(interval);
   }, [isLoading, backendStatus, modelStatus]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
+    if (active && payload?.length) {
       return (
         <div className="bg-slate-900/90 border border-slate-700 p-3 rounded-lg shadow-xl backdrop-blur-sm">
           <p className="text-slate-300 text-xs mb-2 font-medium">{label}</p>
@@ -141,20 +113,21 @@ export default function Dashboard() {
   };
 
   const renderChartOverlay = () => {
-    if (isLoading) {
+    if (isLoading || backendStatus === 'offline') {
       return (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/80 backdrop-blur-sm z-10 rounded-2xl">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/90 backdrop-blur-sm z-10 rounded-2xl">
           <Loader2 className="w-6 h-6 text-blue-400 animate-spin mb-2" />
-          <p className="text-slate-400 text-sm">Connecting to backend...</p>
+          <p className="text-slate-400 text-sm">{isLoading ? 'Waking backend...' : 'Backend unavailable — retrying automatically...'}</p>
+          {lastError && <p className="text-slate-600 text-[10px] mt-2 max-w-xs text-center">{lastError}</p>}
         </div>
       );
     }
-    if (backendStatus === 'online' && modelStatus && !modelStatus.is_trained) {
+    if (modelStatus && !modelStatus.is_trained) {
       return (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/80 backdrop-blur-sm z-10 rounded-2xl">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/90 backdrop-blur-sm z-10 rounded-2xl">
           <ShieldAlert className="w-6 h-6 text-amber-500 mb-2" />
           <p className="text-amber-400/90 text-sm font-medium">Model Not Trained</p>
-          <p className="text-slate-400 text-xs mt-1">Please train the model to view live traffic.</p>
+          <p className="text-slate-400 text-xs mt-1">Open Settings and train the model.</p>
         </div>
       );
     }
@@ -169,6 +142,16 @@ export default function Dashboard() {
     return null;
   };
 
+  const statusBadge = isLoading ? (
+    <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Waking backend...</div>
+  ) : backendStatus === 'offline' ? (
+    <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ServerCrash className="w-4 h-4" />Backend Offline — Retrying</div>
+  ) : !modelStatus?.is_trained ? (
+    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ShieldAlert className="w-4 h-4" />Backend Connected — Model Not Trained</div>
+  ) : (
+    <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><Activity className="w-4 h-4" />Autoencoder Active</div>
+  );
+
   return (
     <div className="space-y-6 flex flex-col h-full">
       <div className="flex justify-between items-start">
@@ -176,98 +159,47 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">Real-Time Metrics</h1>
           <p className="text-slate-400 text-sm">Monitoring network traffic through Autoencoder anomaly detection.</p>
         </div>
-        
-        {isLoading ? (
-          <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Connecting...
-          </div>
-        ) : backendStatus === 'offline' ? (
-          <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
-            <ServerCrash className="w-4 h-4" />
-            Backend Offline
-          </div>
-        ) : !modelStatus?.is_trained ? (
-          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4" />
-            Backend Connected — Model Not Trained
-          </div>
-        ) : (
-          <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
-            <Activity className="w-4 h-4" />
-            Autoencoder Active
-          </div>
-        )}
+        {statusBadge}
       </div>
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Active Connections', value: stats.activeConnections.toLocaleString(), color: 'text-blue-400', statColor: 'text-white' },
-          { label: 'Threats Detected', value: stats.threatsDetected, color: 'text-red-500', statColor: 'text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.5)]' },
-          { label: 'System Load', value: `${stats.systemLoad}%`, color: 'text-amber-500', statColor: 'text-amber-400' },
-          { label: 'Model Efficiency', value: '99.82%', color: 'text-blue-500', statColor: 'text-blue-400' },
+          { label: 'Active Connections', value: stats.activeConnections.toLocaleString(), statColor: 'text-white' },
+          { label: 'Threats Detected', value: stats.threatsDetected, statColor: 'text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.5)]' },
+          { label: 'System Load', value: `${stats.systemLoad}%`, statColor: 'text-amber-400' },
+          { label: 'Model Efficiency', value: '99.82%', statColor: 'text-blue-400' },
         ].map((stat, i) => (
-          <div key={i} className="bg-[#0f111a] border border-white/5 p-4 rounded-xl shadow-lg relative overflow-hidden group">
+          <div key={i} className="bg-[#0f111a] border border-white/5 p-4 rounded-xl shadow-lg relative overflow-hidden">
             <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">{stat.label}</div>
             <div className={`text-2xl font-mono mt-1 ${stat.statColor}`}>
-              {isLoading || (backendStatus === 'online' && !modelStatus?.is_trained) ? '-' : stat.value}
+              {isLoading || backendStatus !== 'online' || !modelStatus?.is_trained ? '-' : stat.value}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
-        {/* Traffic Volume Chart */}
         <div className="bg-[#0a0c14] border border-white/5 rounded-2xl p-5 shadow-inner relative">
           <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Traffic Volume Analysis</h2>
           {renderChartOverlay()}
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorNormal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorAnomaly" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false} />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={12} tickMargin={10} />
-                <YAxis stroke="#64748b" fontSize={12} tickMargin={10} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend />
-                <Area type="monotone" dataKey="normalTraffic" name="Normal Traffic" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorNormal)" />
-                <Area type="monotone" dataKey="anomalousTraffic" name="Anomalous Traffic" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorAnomaly)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <defs><linearGradient id="colorNormal" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient><linearGradient id="colorAnomaly" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false}/><XAxis dataKey="time" stroke="#64748b" fontSize={12} tickMargin={10}/><YAxis stroke="#64748b" fontSize={12} tickMargin={10}/><Tooltip content={<CustomTooltip/>}/><Legend/><Area type="monotone" dataKey="normalTraffic" name="Normal Traffic" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorNormal)"/><Area type="monotone" dataKey="anomalousTraffic" name="Anomalous Traffic" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorAnomaly)"/>
+            </AreaChart>
+          </ResponsiveContainer></div>
         </div>
 
-        {/* Reconstruction Error Chart */}
         <div className="bg-[#0a0c14] border border-white/5 rounded-2xl p-5 shadow-inner relative">
           <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Autoencoder Reconstruction Error</h2>
           {renderChartOverlay()}
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false} />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={12} tickMargin={10} />
-                <YAxis stroke="#64748b" fontSize={12} tickMargin={10} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend />
-                <Line type="monotone" dataKey="threshold" name="Anomaly Threshold" stroke="#eab308" strokeWidth={2} strokeDasharray="5 5" dot={false} />
-                <Line type="monotone" dataKey="reconstructionError" name="MSE Loss" stroke="#8b5cf6" strokeWidth={2} dot={false} activeDot={{ r: 6 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false}/><XAxis dataKey="time" stroke="#64748b" fontSize={12} tickMargin={10}/><YAxis stroke="#64748b" fontSize={12} tickMargin={10}/><Tooltip content={<CustomTooltip/>}/><Legend/><Line type="monotone" dataKey="threshold" name="Anomaly Threshold" stroke="#eab308" strokeWidth={2} strokeDasharray="5 5" dot={false}/><Line type="monotone" dataKey="reconstructionError" name="MSE Loss" stroke="#8b5cf6" strokeWidth={2} dot={false} activeDot={{r:6}}/>
+            </LineChart>
+          </ResponsiveContainer></div>
         </div>
       </div>
     </div>
   );
 }
-
