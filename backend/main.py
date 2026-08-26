@@ -1,21 +1,17 @@
 import os
+import threading
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import io
-import json
 
 from ml_model import IDSAutoencoder
 
 app = FastAPI(title="IDS Deep Learning API")
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://hk8387121-cpu.github.io")
-ALLOWED_ORIGINS = [
-    FRONTEND_URL,
-    "http://localhost:3000",
-    "http://localhost:5173"
-]
+ALLOWED_ORIGINS = [FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,6 +22,21 @@ app.add_middleware(
 )
 
 model = IDSAutoencoder()
+training_lock = threading.Lock()
+training_in_progress = False
+training_error = None
+
+NSL_KDD_URL = "https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTrain%2B_20Percent.txt"
+NSL_KDD_COLUMNS = [
+    "duration","protocol_type","service","flag","src_bytes","dst_bytes","land","wrong_fragment",
+    "urgent","hot","num_failed_logins","logged_in","num_compromised","root_shell","su_attempted",
+    "num_root","num_file_creations","num_shells","num_access_files","num_outbound_cmds","is_host_login",
+    "is_guest_login","count","srv_count","serror_rate","srv_serror_rate","rerror_rate","srv_rerror_rate",
+    "same_srv_rate","diff_srv_rate","srv_diff_host_rate","dst_host_count","dst_host_srv_count",
+    "dst_host_same_srv_rate","dst_host_diff_srv_rate","dst_host_same_src_port_rate","dst_host_srv_diff_host_rate",
+    "dst_host_serror_rate","dst_host_srv_serror_rate","dst_host_rerror_rate","dst_host_srv_rerror_rate",
+    "label","difficulty_level"
+]
 
 class PredictRequest(BaseModel):
     features: dict
@@ -35,92 +46,130 @@ class TrainRequest(BaseModel):
     normal_label: str = "normal"
     percentile: float = 95.0
 
+
+def load_training_dataset(path: str) -> pd.DataFrame:
+    if os.path.exists(path) and not path.startswith("http"):
+        return pd.read_csv(path)
+
+    df = pd.read_csv(NSL_KDD_URL, header=None)
+    df.columns = NSL_KDD_COLUMNS
+    return df
+
+
+def run_training(dataset_path: str = "data/nsl_kdd_subset.csv", normal_label: str = "normal", percentile: float = 95.0):
+    global training_in_progress, training_error
+    with training_lock:
+        if training_in_progress:
+            return False
+        training_in_progress = True
+        training_error = None
+
+    try:
+        df = load_training_dataset(dataset_path)
+        model.train(df, normal_label=normal_label, percentile=percentile)
+        return True
+    except Exception as exc:
+        training_error = str(exc)
+        print(f"Automatic model training failed: {exc}")
+        return False
+    finally:
+        training_in_progress = False
+
+
+def auto_train_on_startup():
+    # Render Free services have an ephemeral filesystem. If the container wakes
+    # without the saved model, rebuild it automatically from the NSL-KDD source.
+    if not model.is_trained:
+        print("No saved autoencoder found. Starting automatic NSL-KDD training...")
+        run_training()
+        if model.is_trained:
+            print("Automatic model training completed successfully.")
+
+
+@app.on_event("startup")
+async def startup_event():
+    threading.Thread(target=auto_train_on_startup, daemon=True).start()
+
+
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "IDS Autoencoder API is running"}
+
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
+
 @app.get("/api/v1/model/status")
 def model_status():
-    status_info = {
+    return {
         "is_trained": model.is_trained,
+        "training_in_progress": training_in_progress,
         "threshold": float(model.threshold) if model.is_trained else None,
         "features": len(model.feature_columns) if model.is_trained else 0,
         "feature_names": model.feature_columns if model.is_trained else [],
-        "status": "Ready for inference" if model.is_trained else "Awaiting training data",
+        "status": (
+            "Ready for inference" if model.is_trained
+            else "Training model automatically" if training_in_progress
+            else "Training failed" if training_error
+            else "Awaiting training data"
+        ),
         "training_samples": getattr(model, "training_samples", None),
-        "model_version": "1.0.0"
+        "training_error": training_error,
+        "model_version": "1.1.0"
     }
-    return status_info
+
 
 @app.post("/api/v1/predict")
 def predict_single(request: PredictRequest):
+    if training_in_progress:
+        raise HTTPException(status_code=503, detail="Model is still training. Please retry shortly.")
     if not model.is_trained:
         raise HTTPException(status_code=400, detail="Model is not trained yet.")
-    
-    df = pd.DataFrame([request.features])
-    results = model.predict(df)
-    return results[0]
+    return model.predict(pd.DataFrame([request.features]))[0]
+
 
 @app.post("/api/v1/predict/csv")
 async def predict_csv(file: UploadFile = File(...)):
+    if training_in_progress:
+        raise HTTPException(status_code=503, detail="Model is still training. Please retry shortly.")
     if not model.is_trained:
         raise HTTPException(status_code=400, detail="Model is not trained yet.")
-        
-    if not file.filename.endswith('.csv'):
+    if not file.filename or not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must be a CSV.")
-        
+
     contents = await file.read()
     df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-    
     results = model.predict(df)
-    
-    # Merge results with original dataframe to return
-    df['is_anomaly'] = [r['is_anomaly'] for r in results]
-    df['prediction'] = [r['prediction'] for r in results]
-    df['reconstruction_error'] = [r['reconstruction_error'] for r in results]
-    df['confidence_score'] = [r['confidence_score'] for r in results]
-    
-    return {"results": results, "summary": {
-        "total": len(results),
-        "anomalies": sum(1 for r in results if r['is_anomaly']),
-        "normal": sum(1 for r in results if not r['is_anomaly'])
-    }}
+
+    return {
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "anomalies": sum(1 for r in results if r['is_anomaly']),
+            "normal": sum(1 for r in results if not r['is_anomaly'])
+        }
+    }
+
 
 @app.post("/api/v1/train")
 def train_model(request: TrainRequest):
-    try:
-        path = request.dataset_path
-        if not os.path.exists(path) and not path.startswith("http"):
-            path = "https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTrain%2B_20Percent.txt"
-            df = pd.read_csv(path, header=None)
-            df.columns = [
-                "duration","protocol_type","service","flag","src_bytes","dst_bytes","land","wrong_fragment",
-                "urgent","hot","num_failed_logins","logged_in","num_compromised","root_shell","su_attempted",
-                "num_root","num_file_creations","num_shells","num_access_files","num_outbound_cmds","is_host_login",
-                "is_guest_login","count","srv_count","serror_rate","srv_serror_rate","rerror_rate","srv_rerror_rate",
-                "same_srv_rate","diff_srv_rate","srv_diff_host_rate","dst_host_count","dst_host_srv_count",
-                "dst_host_same_srv_rate","dst_host_diff_srv_rate","dst_host_same_src_port_rate","dst_host_srv_diff_host_rate",
-                "dst_host_serror_rate","dst_host_srv_serror_rate","dst_host_rerror_rate","dst_host_srv_rerror_rate",
-                "label","difficulty_level"
-            ]
-        else:
-            df = pd.read_csv(path)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Dataset not found or cannot be read: {str(e)}")
-        
-    history = model.train(df, normal_label=request.normal_label, percentile=request.percentile)
-    
+    if training_in_progress:
+        raise HTTPException(status_code=409, detail="Model training is already in progress.")
+
+    success = run_training(request.dataset_path, request.normal_label, request.percentile)
+    if not success or not model.is_trained:
+        raise HTTPException(status_code=500, detail=training_error or "Model training failed.")
+
     return {
         "status": "success",
         "threshold": float(model.threshold),
-        "training_samples": len(df[df['label'] == request.normal_label]),
+        "training_samples": model.training_samples,
         "features": len(model.feature_columns),
-        "history": history
+        "history": getattr(model, "last_history", {})
     }
+
 
 if __name__ == "__main__":
     import uvicorn
