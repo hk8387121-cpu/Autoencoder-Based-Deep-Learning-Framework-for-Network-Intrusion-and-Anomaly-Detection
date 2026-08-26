@@ -70,25 +70,21 @@ def run_training(dataset_path: str = "data/nsl_kdd_subset.csv", normal_label: st
         return True
     except Exception as exc:
         training_error = str(exc)
-        print(f"Automatic model training failed: {exc}")
+        print(f"Model training failed: {exc}")
         return False
     finally:
         training_in_progress = False
 
 
-def auto_train_on_startup():
-    # Render Free services have an ephemeral filesystem. If the container wakes
-    # without the saved model, rebuild it automatically from the NSL-KDD source.
-    if not model.is_trained:
-        print("No saved autoencoder found. Starting automatic NSL-KDD training...")
-        run_training()
-        if model.is_trained:
-            print("Automatic model training completed successfully.")
-
-
 @app.on_event("startup")
 async def startup_event():
-    threading.Thread(target=auto_train_on_startup, daemon=True).start()
+    # Do not train automatically on every Render restart. Render Free instances
+    # can restart/sleep, and automatic training makes the API appear unavailable
+    # for several minutes. Train explicitly through POST /api/v1/train instead.
+    if model.is_trained:
+        print("Loaded saved autoencoder. Model is ready for inference.")
+    else:
+        print("No saved autoencoder found. Model is awaiting training.")
 
 
 @app.get("/")
@@ -111,13 +107,13 @@ def model_status():
         "feature_names": model.feature_columns if model.is_trained else [],
         "status": (
             "Ready for inference" if model.is_trained
-            else "Training model automatically" if training_in_progress
+            else "Training model" if training_in_progress
             else "Training failed" if training_error
-            else "Awaiting training data"
+            else "Model not trained"
         ),
         "training_samples": getattr(model, "training_samples", None),
         "training_error": training_error,
-        "model_version": "1.1.0"
+        "model_version": "1.2.0"
     }
 
 
@@ -126,7 +122,7 @@ def predict_single(request: PredictRequest):
     if training_in_progress:
         raise HTTPException(status_code=503, detail="Model is still training. Please retry shortly.")
     if not model.is_trained:
-        raise HTTPException(status_code=400, detail="Model is not trained yet.")
+        raise HTTPException(status_code=400, detail="Model is not trained yet. Open Settings and train the model.")
     return model.predict(pd.DataFrame([request.features]))[0]
 
 
@@ -135,7 +131,7 @@ async def predict_csv(file: UploadFile = File(...)):
     if training_in_progress:
         raise HTTPException(status_code=503, detail="Model is still training. Please retry shortly.")
     if not model.is_trained:
-        raise HTTPException(status_code=400, detail="Model is not trained yet.")
+        raise HTTPException(status_code=400, detail="Model is not trained yet. Open Settings and train the model.")
     if not file.filename or not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must be a CSV.")
 
