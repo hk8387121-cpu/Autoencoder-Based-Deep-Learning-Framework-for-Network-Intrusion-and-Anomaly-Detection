@@ -25,6 +25,46 @@ export default function Settings() {
       </div>
 
       <div className="grid gap-6">
+        {/* Model Management */}
+        <div className="bg-[#0a0c14] border border-white/5 shadow-inner rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-white/5 bg-white/5">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 flex items-center gap-2">
+              <Shield className="w-5 h-5 text-indigo-500" />
+              Model Management
+            </h3>
+          </div>
+          <div className="p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-slate-200">Train Autoencoder</p>
+                <p className="text-sm text-slate-500">Trigger model training on the NSL-KDD dataset</p>
+              </div>
+              <button 
+                onClick={async () => {
+                  try {
+                    const { trainModel } = await import('../api');
+                    setSaveSuccess(false);
+                    // Use a toast or similar in a real app, here we just trigger training and show success later
+                    const btn = document.getElementById('train-btn');
+                    if (btn) btn.innerText = 'Training...';
+                    await trainModel();
+                    if (btn) btn.innerText = 'Train Model';
+                    handleSave();
+                  } catch (err) {
+                    console.error(err);
+                    const btn = document.getElementById('train-btn');
+                    if (btn) btn.innerText = 'Error!';
+                  }
+                }}
+                id="train-btn"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Train Model
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Profile & Security */}
         <div className="bg-[#0a0c14] border border-white/5 shadow-inner rounded-xl overflow-hidden">
           <div className="p-4 border-b border-white/5 bg-white/5">

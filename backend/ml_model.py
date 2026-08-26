@@ -117,6 +117,7 @@ class IDSAutoencoder:
         mse = np.mean(np.power(X_train - X_train_pred, 2), axis=1)
         self.threshold = np.percentile(mse, percentile)
         
+        self.training_samples = len(normal_df)
         self.is_trained = True
         self._save()
         
@@ -155,7 +156,8 @@ class IDSAutoencoder:
             "scaler": self.scaler,
             "label_encoders": self.label_encoders,
             "threshold": self.threshold,
-            "feature_columns": self.feature_columns
+            "feature_columns": self.feature_columns,
+            "training_samples": getattr(self, "training_samples", None)
         }
         with open(os.path.join(self.model_dir, "config.pkl"), "wb") as f:
             pickle.dump(config, f)
@@ -172,4 +174,5 @@ class IDSAutoencoder:
                 self.label_encoders = config["label_encoders"]
                 self.threshold = config["threshold"]
                 self.feature_columns = config["feature_columns"]
+                self.training_samples = config.get("training_samples", None)
             self.is_trained = True
