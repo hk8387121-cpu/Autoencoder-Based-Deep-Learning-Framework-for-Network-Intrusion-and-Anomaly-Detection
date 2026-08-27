@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { ShieldAlert, Activity, FileText, Settings, LogOut, ExternalLink } from 'lucide-react';
+import { ShieldAlert, Activity, FileText, Settings, LogOut, ExternalLink, BrainCircuit } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { cn } from '../utils/cn';
 
@@ -9,7 +9,8 @@ export default function Sidebar() {
   const navItems = [
     { name: 'Dashboard', path: '/', icon: Activity },
     { name: 'Alerts Log', path: '/alerts', icon: ShieldAlert },
-    { name: 'Reports', path: '/reports', icon: FileText },
+    { name: 'Security Report', path: '/reports', icon: FileText },
+    { name: 'Model Configuration', path: '/model-info', icon: BrainCircuit },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
   const apiBase = (import.meta.env.VITE_API_BASE_URL || 'https://ids-autoencoder-backend.onrender.com').replace(/\/$/, '');
