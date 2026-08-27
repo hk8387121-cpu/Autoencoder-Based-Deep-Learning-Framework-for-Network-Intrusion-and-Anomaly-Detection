@@ -1,98 +1,124 @@
 # Deep Learning-Based Network Intrusion Detection Using Autoencoders for Anomaly Detection
 
 ## Project Overview
-Traditional Intrusion Detection Systems (IDS) rely heavily on signature-based detection, which often fails to identify zero-day or unknown attacks. 
+Traditional Intrusion Detection Systems (IDS) rely heavily on signatures. This project demonstrates an **Autoencoder-based anomaly detector** that learns the reconstruction pattern of normal NSL-KDD traffic.
 
-**Solution**: This project implements an **Autoencoder Neural Network** that learns the normal baseline of network traffic. Once trained, the model calculates a *Reconstruction Error* for incoming traffic. 
-* Low Reconstruction Error = Normal Traffic
-* High Reconstruction Error = Potential Intrusion (Anomaly)
+**Detection principle**:
+- Low Reconstruction Error → traffic is treated as normal
+- Reconstruction Error above the learned threshold → traffic is flagged as a potential intrusion
 
-The system automatically calculates a dynamic threshold (e.g. 95th percentile of normal validation error) and classifies traffic in real-time.
-
----
+The threshold is calculated from the reconstruction-error distribution of the normal training data (configurable percentile; the default is the 95th percentile). This is an anomaly-detection threshold, **not an accuracy score**.
 
 ## Architecture & Workflow
 
 ```text
-Network Dataset (NSL-KDD)
+NSL-KDD Dataset
        ↓
-Data Preprocessing (Handling missing values, duplicates)
+Select Normal Traffic for Training
        ↓
-Feature Encoding (LabelEncoding) & Normalization (StandardScaler)
+Categorical Encoding + StandardScaler
        ↓
-Normal Traffic Training Data
+Dense Autoencoder
        ↓
-Autoencoder Training (Dense layers with Bottleneck)
+Reconstruct Normal Feature Vectors
        ↓
-Reconstruction Error Calculation
+Mean Squared Reconstruction Error
        ↓
-Threshold Determination (95th/99th percentile)
+95th Percentile Threshold
        ↓
 ┌───────────────────────┐
-│ Error ≤ Threshold     │ → Normal Traffic
-│ Error > Threshold     │ → Intrusion Detected
+│ Error ≤ Threshold     │ → Normal
+│ Error > Threshold     │ → Potential Intrusion
 └───────────────────────┘
        ↓
-Performance Evaluation (Accuracy, Precision, Recall, F1)
+FastAPI Inference API
        ↓
-Dashboard Visualization & Alerts (React Frontend)
+React Dashboard / Alerts / Security Report
 ```
 
-## Setup & Execution
+## Autoencoder Architecture
 
-### 1. Backend (Python ML API)
-The backend is powered by FastAPI, TensorFlow, Scikit-Learn, and Pandas. It exposes the Autoencoder model to the frontend via REST APIs.
+The implementation uses a fully connected autoencoder with a compressed bottleneck:
 
-**Requirements**: Python 3.10+, pip
+```text
+Input features
+    ↓
+Dense (75% of input width)
+    ↓
+Dense (50% of input width)
+    ↓
+Bottleneck (25% of input width)
+    ↓
+Dense (50% of input width)
+    ↓
+Dense (75% of input width)
+    ↓
+Output (original input width)
+```
 
-**Installation & Running**:
+Training uses **Adam** optimization and **Mean Squared Error (MSE)** reconstruction loss. Categorical NSL-KDD columns are label encoded and numerical inputs are standardized before training.
+
+## Important Demo / Deployment Note
+
+The public GitHub Pages dashboard runs in **demonstration inference mode**. It generates schema-valid feature vectors in the browser and sends them through the **real TensorFlow Autoencoder running in the FastAPI backend**. Therefore the displayed predictions, reconstruction errors, thresholds, anomaly counts, alerts and reports come from actual model inference.
+
+This public demo is **not a live packet sniffer** and does not claim to capture packets from the reviewer's computer. For actual network traffic, the backend exposes a CSV inference endpoint that accepts traffic records matching the trained feature schema.
+
+## Backend
+
+The backend is powered by FastAPI, TensorFlow, Scikit-Learn and Pandas.
+
 ```bash
 cd backend
-
-# Install requirements
 pip install -r requirements.txt
-
-# Start the server
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
-The API runs on `http://127.0.0.1:8000` with interactive docs available at `http://127.0.0.1:8000/docs`.
 
-### 2. Frontend (React Dashboard)
-The frontend is built with React, Vite, TailwindCSS, and Recharts.
+The API provides:
+- `GET /health` — backend health
+- `GET /api/v1/model/status` — model readiness, threshold and feature schema
+- `GET /api/v1/metrics` — current inference counters and anomaly rate
+- `GET /api/v1/alerts` — backend-generated anomaly events
+- `GET /api/v1/reports/summary` — current report statistics
+- `POST /api/v1/train` — train/retrain the autoencoder
+- `POST /api/v1/predict` — single feature-vector inference
+- `POST /api/v1/predict/csv` — batch CSV inference
 
-**Installation & Running Locally**:
-```bash
-# Install dependencies
-npm install
+## Dataset
 
-# Start the development server
-npm run dev
-```
+The project uses an NSL-KDD-derived CSV for training. The backend also contains a remote fallback for the NSL-KDD 20% training file if the local dataset is unavailable during deployment.
 
-**Deploying to GitHub Pages**:
-1. Go to your GitHub repository settings and ensure **GitHub Pages** is enabled and set the source to **GitHub Actions**.
-2. Go to the **Variables** tab under Settings -> Secrets and variables -> Actions. Add a repository variable named `VITE_API_BASE_URL` pointing to your deployed FastAPI backend (e.g., `https://my-fastapi-backend.com/api/v1`).
-3. Push your code to the `main` branch. The included `.github/workflows/deploy.yml` will automatically build and deploy the frontend to GitHub Pages.
+The training routine selects rows whose `label` is `normal`; attack labels are not used to fit the autoencoder. The model therefore learns a normal-traffic reconstruction baseline rather than learning a supervised attack classifier.
 
-## API Endpoints (Backend)
+## Frontend
 
-* `GET /api/v1/model/status`: Returns whether the model is trained, the current threshold, and the features expected.
-* `POST /api/v1/train`: Initiates the model training process on the `data/nsl_kdd_subset.csv` dataset. Returns the threshold and training history.
-* `POST /api/v1/predict`: Accepts a JSON object containing network traffic features and returns a prediction (`Intrusion` or `Normal`), reconstruction error, and confidence score.
-* `POST /api/v1/predict/csv`: Accepts a CSV file upload, processes it using the trained scaler/encoder, and returns predictions for the entire dataset.
+The frontend is built with React, Vite, TailwindCSS and Recharts and is deployed through GitHub Pages.
 
-## Training the Model
-1. Start both backend and frontend servers.
-2. Navigate to the **Model Configuration** tab in the Dashboard menu.
-3. Click **Train Model Now**. The model will process the normal traffic from the dataset, determine the threshold, and save the configuration to the disk.
-4. Once trained, the dashboard's Real-Time Metrics page will fetch real predictions by sending dummy network configurations or user-uploaded configurations to the model API.
+Main screens:
+- **Dashboard** — live backend inference counters and reconstruction-error visualization
+- **Alerts Log** — anomaly events recorded by the backend
+- **Security Report** — current backend statistics and PDF export
+- **Model Configuration** — model status, threshold, feature count and retraining control
+- **Settings** — model controls and browser-local preferences
 
-## Project Files Summary
-- `/backend/main.py`: FastAPI server handling HTTP requests.
-- `/backend/ml_model.py`: Autoencoder implementation (TensorFlow), data scaling, thresholding, model persistence.
-- `/backend/requirements.txt`: Python package dependencies.
-- `/backend/data/nsl_kdd_subset.csv`: Sample of NSL-KDD dataset used for training/validation.
-- `/src/pages/Dashboard.tsx`: Real-time dashboard receiving real prediction metrics.
-- `/src/pages/ModelInfo.tsx`: UI panel for configuring and initiating Autoencoder training.
-- `/src/api.ts`: API integration layer connecting React to the Python backend.
-- `vite.config.ts`: Configured proxy directing `/api` calls to the local FastAPI backend on port 8000.
+## Reviewer Verification
+
+A reviewer can verify the implementation without trusting hard-coded dashboard numbers:
+
+1. Open **Model Configuration** and inspect the live model status, feature count and threshold returned by the backend.
+2. Open **Dashboard** and observe the inference counters increasing as real `/predict` requests are made.
+3. Open **Alerts Log** and verify that anomaly rows originate from the backend API.
+4. Compare the threshold and anomaly counts with **Security Report**; both pages use the same backend state.
+5. Download the PDF and verify that its values match the current report data.
+6. Use the backend's interactive `/docs` page to inspect the REST API directly.
+
+## Project Files
+
+- `/backend/main.py` — FastAPI API, training lifecycle, prediction recording and report endpoints
+- `/backend/ml_model.py` — autoencoder, preprocessing, threshold calculation and model persistence
+- `/backend/data/nsl_kdd_subset.csv` — local NSL-KDD-derived training data
+- `/src/pages/Dashboard.tsx` — inference dashboard
+- `/src/pages/Alerts.tsx` — backend alert log
+- `/src/pages/Reports.tsx` — backend report and PDF export
+- `/src/pages/ModelInfo.tsx` — model configuration and retraining
+- `/src/api.ts` — frontend/backend API integration
