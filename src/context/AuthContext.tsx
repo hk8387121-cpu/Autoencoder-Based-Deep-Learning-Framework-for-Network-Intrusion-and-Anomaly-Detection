@@ -14,9 +14,20 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// The dashboard is a client-side monitoring/demo application. Keep it usable
+// even when Firebase is unavailable or not configured for the GitHub Pages
+// origin. Firebase/Google sign-in remains available when configured.
+const DEMO_USER: User = {
+  id: 'demo-user',
+  name: 'Security Analyst',
+  email: 'analyst@local.demo',
+  role: 'Security Analyst',
+  mfaEnabled: false,
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(DEMO_USER);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let unsubscribe = () => {};
@@ -31,56 +42,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             mfaEnabled: false,
           });
         } else {
-          setUser(null);
+          // Do not block the public GitHub Pages dashboard when Firebase has
+          // no authenticated session. Keep the local demo session active.
+          setUser(current => current || DEMO_USER);
         }
         setLoading(false);
       });
     } catch (error) {
-      console.warn('Firebase Auth unavailable. Falling back to offline mode.', error);
+      console.warn('Firebase Auth unavailable. Continuing in local demo mode.', error);
+      setUser(DEMO_USER);
       setLoading(false);
     }
     return unsubscribe;
   }, []);
 
   const login = async (email: string, mfaCode?: string) => {
-    if (email.toLowerCase().includes('admin')) {
-      setUser({ id: '1', name: 'Admin User', email, role: 'Admin', mfaEnabled: true });
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) throw new Error('Email address is required.');
+
+    if (normalizedEmail.toLowerCase().includes('admin')) {
+      setUser({ id: '1', name: 'Admin User', email: normalizedEmail, role: 'Admin', mfaEnabled: true });
     } else {
-      setUser({ id: '2', name: 'Security Analyst', email, role: 'Security Analyst', mfaEnabled: false });
+      setUser({ id: '2', name: 'Security Analyst', email: normalizedEmail, role: 'Security Analyst', mfaEnabled: false });
     }
   };
 
   const googleLogin = async () => {
     if (!auth || !googleProvider || typeof googleProvider.setCustomParameters !== 'function') {
-      throw new Error('Google authentication is not configured. Check Firebase configuration.');
+      throw new Error('Google authentication is not configured. The dashboard can still be used in demo mode.');
     }
 
     googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-    // Use redirect instead of a popup. This avoids Chrome popup blocking on
-    // GitHub Pages and lets Firebase return to the same deployed application.
-    await signInWithRedirect(auth, googleProvider);
+    // Redirect avoids popup blocking on GitHub Pages. If Firebase is not
+    // authorized for this origin, the application remains usable in demo mode.
+    try {
+      await signInWithRedirect(auth, googleProvider);
+    } catch (error) {
+      setUser(DEMO_USER);
+      throw error;
+    }
   };
 
   const logout = async () => {
     try {
       await signOut(auth);
+    } catch (error) {
+      console.warn('Firebase sign-out unavailable; continuing locally.', error);
     } finally {
-      setUser(null);
+      // Keep the public dashboard accessible after logout.
+      setUser(DEMO_USER);
     }
   };
 
   const updateUser = (updates: Partial<User>) => {
-    setUser(current => current ? { ...current, ...updates } : current);
+    setUser(current => current ? { ...current, ...updates } : { ...DEMO_USER, ...updates });
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#05060a] flex items-center justify-center">
-        <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <AuthContext.Provider value={{ user, login, googleLogin, logout, updateUser, loading }}>
