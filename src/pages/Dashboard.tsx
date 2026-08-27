@@ -45,7 +45,9 @@ export default function Dashboard() {
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30000);
+    // Poll more frequently while the backend is starting/training so the
+    // dashboard changes to live metrics shortly after the model is ready.
+    const interval = setInterval(fetchStatus, 10000);
     return () => { mounted = false; clearInterval(interval); };
   }, []);
 
@@ -122,12 +124,31 @@ export default function Dashboard() {
         </div>
       );
     }
+    if (modelStatus?.training_in_progress) {
+      return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/90 backdrop-blur-sm z-10 rounded-2xl">
+          <Loader2 className="w-6 h-6 text-blue-400 animate-spin mb-2" />
+          <p className="text-blue-400 text-sm font-medium">Training Autoencoder...</p>
+          <p className="text-slate-400 text-xs mt-1">Learning normal NSL-KDD traffic. Live metrics will start automatically.</p>
+        </div>
+      );
+    }
+    if (modelStatus?.status === 'Training failed') {
+      return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/90 backdrop-blur-sm z-10 rounded-2xl">
+          <ShieldAlert className="w-6 h-6 text-red-500 mb-2" />
+          <p className="text-red-400 text-sm font-medium">Model Training Failed</p>
+          <p className="text-slate-400 text-xs mt-1">Open Settings to retry training.</p>
+          {modelStatus.training_error && <p className="text-slate-600 text-[10px] mt-2 max-w-xs text-center">{modelStatus.training_error}</p>}
+        </div>
+      );
+    }
     if (modelStatus && !modelStatus.is_trained) {
       return (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0c14]/90 backdrop-blur-sm z-10 rounded-2xl">
           <ShieldAlert className="w-6 h-6 text-amber-500 mb-2" />
-          <p className="text-amber-400/90 text-sm font-medium">Model Not Trained</p>
-          <p className="text-slate-400 text-xs mt-1">Open Settings and train the model.</p>
+          <p className="text-amber-400/90 text-sm font-medium">Model Starting</p>
+          <p className="text-slate-400 text-xs mt-1">Waiting for the backend model to become ready.</p>
         </div>
       );
     }
@@ -146,8 +167,12 @@ export default function Dashboard() {
     <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Waking backend...</div>
   ) : backendStatus === 'offline' ? (
     <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ServerCrash className="w-4 h-4" />Backend Offline — Retrying</div>
+  ) : modelStatus?.training_in_progress ? (
+    <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Training Autoencoder</div>
+  ) : modelStatus?.status === 'Training failed' ? (
+    <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ShieldAlert className="w-4 h-4" />Model Training Failed</div>
   ) : !modelStatus?.is_trained ? (
-    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ShieldAlert className="w-4 h-4" />Backend Connected — Model Not Trained</div>
+    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><ShieldAlert className="w-4 h-4" />Backend Connected — Starting Model</div>
   ) : (
     <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2"><Activity className="w-4 h-4" />Autoencoder Active</div>
   );
