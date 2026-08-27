@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
 import { auth, googleProvider } from '../lib/firebase';
-import { signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from 'firebase/auth';
 
 interface AuthContextType {
   user: User | null;
@@ -26,7 +26,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             id: firebaseUser.uid,
             name: firebaseUser.displayName || 'User',
             email: firebaseUser.email || '',
-            role: firebaseUser.email?.includes('admin') ? 'Admin' : 'Security Analyst',
+            role: firebaseUser.email?.toLowerCase().includes('admin') ? 'Admin' : 'Security Analyst',
             mfaEnabled: false,
           });
         } else {
@@ -35,66 +35,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       });
       return () => unsubscribe();
-    } catch (e) {
-      console.warn("Firebase Auth unavailable. Falling back to offline mode.");
+    } catch (error) {
+      console.warn('Firebase Auth unavailable. Falling back to offline mode.', error);
       setLoading(false);
       return () => {};
     }
   }, []);
 
   const login = async (email: string, mfaCode?: string) => {
-    // Mock login logic
-    if (email.includes('admin')) {
-      setUser({
-        id: '1',
-        name: 'Admin User',
-        email,
-        role: 'Admin',
-        mfaEnabled: true,
-      });
+    if (email.toLowerCase().includes('admin')) {
+      setUser({ id: '1', name: 'Admin User', email, role: 'Admin', mfaEnabled: true });
     } else {
-      setUser({
-        id: '2',
-        name: 'Security Analyst',
-        email,
-        role: 'Security Analyst',
-        mfaEnabled: false,
-      });
+      setUser({ id: '2', name: 'Security Analyst', email, role: 'Security Analyst', mfaEnabled: false });
     }
   };
 
   const googleLogin = async () => {
+    if (!auth || !googleProvider || typeof googleProvider.setCustomParameters !== 'function') {
+      throw new Error('Google authentication is not configured. Check Firebase configuration.');
+    }
+
+    googleProvider.setCustomParameters({ prompt: 'select_account' });
+
     try {
-      if (!googleProvider || Object.keys(googleProvider).length === 0) {
-        throw new Error("Google Provider not initialized. Running in offline mode.");
-      }
-      googleProvider.setCustomParameters({ prompt: 'select_account' });
+      // Popup is convenient when the browser permits it.
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
-      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
-        alert('Sign-in popup was blocked or closed. Please open the app in a new tab to sign in with Google.');
-        return;
+      const code = error?.code || '';
+      // GitHub Pages/browser privacy settings can block Firebase's popup.
+      // Redirect uses the same Google provider without opening a popup.
+      if (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectError: any) {
+          console.error('Google redirect sign-in failed:', redirectError);
+          throw new Error(redirectError?.message || 'Google sign-in could not be started.');
+        }
       }
-      console.error('Error signing in with Google', error);
-      alert('Authentication unavailable: ' + (error.message || 'Unknown error'));
+
+      console.error('Google sign-in failed:', error);
+      throw new Error(error?.message || 'Google sign-in could not be completed.');
     }
   };
 
   const logout = async () => {
-    await signOut(auth);
-    setUser(null);
-  };
-
-  const updateUser = (updates: Partial<User>) => {
-    if (user) {
-      setUser({ ...user, ...updates });
+    try {
+      await signOut(auth);
+    } finally {
+      setUser(null);
     }
   };
 
+  const updateUser = (updates: Partial<User>) => {
+    setUser(current => current ? { ...current, ...updates } : current);
+  };
+
   if (loading) {
-    return <div className="min-h-screen bg-[#05060a] flex items-center justify-center">
-      <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
-    </div>;
+    return (
+      <div className="min-h-screen bg-[#05060a] flex items-center justify-center">
+        <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+      </div>
+    );
   }
 
   return (
@@ -106,8 +112,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }
