@@ -1,15 +1,23 @@
 import os
+import pickle
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-import pickle
+
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 class IDSAutoencoder:
-    def __init__(self, model_dir="models"):
-        self.model_dir = model_dir
+    def __init__(self, model_dir=None):
+        self.model_dir = Path(model_dir) if model_dir else BASE_DIR / "models"
+        if not self.model_dir.is_absolute():
+            self.model_dir = (BASE_DIR / self.model_dir).resolve()
+
         self.model = None
         self.scaler = None
         self.label_encoders = {}
@@ -19,7 +27,7 @@ class IDSAutoencoder:
         self.last_history = {}
         self.is_trained = False
 
-        os.makedirs(self.model_dir, exist_ok=True)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
         self._load_if_exists()
 
     def _build_model(self, input_dim):
@@ -30,21 +38,23 @@ class IDSAutoencoder:
             layers.Dense(max(1, int(input_dim * 0.25)), activation="relu", name="bottleneck"),
             layers.Dense(max(1, int(input_dim * 0.5)), activation="relu"),
             layers.Dense(max(1, int(input_dim * 0.75)), activation="relu"),
-            layers.Dense(input_dim, activation="linear")
+            layers.Dense(input_dim, activation="linear"),
         ])
         model.compile(optimizer="adam", loss="mse")
         return model
 
     def preprocess_fit(self, df):
         df = df.dropna().copy()
-        features = df.drop(columns=['label'], errors='ignore')
+        features = df.drop(columns=["label"], errors="ignore")
         self.feature_columns = list(features.columns)
 
-        categorical_cols = features.select_dtypes(include=['object']).columns
+        categorical_cols = features.select_dtypes(include=["object"]).columns
         self.label_encoders = {}
+
         for col in categorical_cols:
             le = LabelEncoder()
             features[col] = le.fit_transform(features[col].astype(str))
+            le.classes_ = np.unique(np.append(le.classes_, "<unknown>"))
             self.label_encoders[col] = le
 
         self.scaler = StandardScaler()
@@ -62,32 +72,36 @@ class IDSAutoencoder:
         for col, le in self.label_encoders.items():
             if col not in features.columns:
                 continue
+
             values = features[col].astype(str)
             known = set(le.classes_)
-            values = values.map(lambda value: value if value in known else '<unknown>')
-            if '<unknown>' not in le.classes_:
-                le.classes_ = np.append(le.classes_, '<unknown>')
+            values = values.map(lambda value: value if value in known else "<unknown>")
             features[col] = le.transform(values)
 
         return self.scaler.transform(features)
 
     def train(self, df, normal_label="normal", percentile=95):
-        if 'label' not in df.columns:
+        if "label" not in df.columns:
             raise ValueError("Dataset must contain a 'label' column for training.")
 
-        normal_df = df[df['label'].astype(str).str.lower() == str(normal_label).lower()].copy()
+        normal_df = df[
+            df["label"].astype(str).str.strip().str.lower()
+            == str(normal_label).strip().lower()
+        ].copy()
+
         if normal_df.empty:
             raise ValueError(f"No normal traffic found with label '{normal_label}'")
 
         X_train = self.preprocess_fit(normal_df)
         self.model = self._build_model(X_train.shape[1])
+
         history = self.model.fit(
             X_train,
             X_train,
             epochs=10,
             batch_size=32,
             validation_split=0.1,
-            verbose=1
+            verbose=1,
         )
 
         X_train_pred = self.model.predict(X_train, verbose=0)
@@ -116,36 +130,56 @@ class IDSAutoencoder:
                 "prediction": "Intrusion" if is_anomaly[i] else "Normal",
                 "reconstruction_error": float(mse[i]),
                 "threshold": float(self.threshold),
-                "confidence_score": float(confidence[i])
+                "confidence_score": float(confidence[i]),
             }
             for i in range(len(df))
         ]
 
     def _save(self):
-        if self.model is not None:
-            self.model.save(os.path.join(self.model_dir, "autoencoder.h5"))
+        if self.model is None:
+            return
 
-        config = {
-            "scaler": self.scaler,
-            "label_encoders": self.label_encoders,
-            "threshold": self.threshold,
-            "feature_columns": self.feature_columns,
-            "training_samples": self.training_samples
-        }
-        with open(os.path.join(self.model_dir, "config.pkl"), "wb") as f:
-            pickle.dump(config, f)
+        model_path = self.model_dir / "autoencoder.h5"
+        config_path = self.model_dir / "config.pkl"
+        model_tmp = self.model_dir / "autoencoder_tmp.h5"
+        config_tmp = self.model_dir / "config.pkl.tmp"
+
+        try:
+            self.model.save(str(model_tmp))
+            config = {
+                "scaler": self.scaler,
+                "label_encoders": self.label_encoders,
+                "threshold": self.threshold,
+                "feature_columns": self.feature_columns,
+                "training_samples": self.training_samples,
+                "model_version": "1.3.0",
+            }
+
+            with open(config_tmp, "wb") as f:
+                pickle.dump(config, f)
+
+            os.replace(model_tmp, model_path)
+            os.replace(config_tmp, config_path)
+        finally:
+            for tmp_path in (model_tmp, config_tmp):
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
 
     def _load_if_exists(self):
-        model_path = os.path.join(self.model_dir, "autoencoder.h5")
-        config_path = os.path.join(self.model_dir, "config.pkl")
+        model_path = self.model_dir / "autoencoder.h5"
+        config_path = self.model_dir / "config.pkl"
 
-        if not (os.path.exists(model_path) and os.path.exists(config_path)):
+        if not (model_path.exists() and config_path.exists()):
             return
 
         try:
-            self.model = tf.keras.models.load_model(model_path)
+            self.model = tf.keras.models.load_model(str(model_path))
             with open(config_path, "rb") as f:
                 config = pickle.load(f)
+
             self.scaler = config["scaler"]
             self.label_encoders = config["label_encoders"]
             self.threshold = float(config["threshold"])
@@ -155,5 +189,12 @@ class IDSAutoencoder:
             print(f"Loaded trained autoencoder ({self.training_samples} normal samples).")
         except Exception as exc:
             self.model = None
+            self.scaler = None
+            self.label_encoders = {}
+            self.feature_columns = []
+            self.training_samples = None
             self.is_trained = False
-            print(f"Saved model could not be loaded; automatic retraining will be used: {exc}")
+            print(
+                "Saved model could not be loaded; automatic retraining will be used: "
+                f"{exc}"
+            )
