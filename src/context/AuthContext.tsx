@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
 import { auth, googleProvider } from '../lib/firebase';
-import { signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from 'firebase/auth';
+import { signInWithRedirect, onAuthStateChanged, signOut } from 'firebase/auth';
 
 interface AuthContextType {
   user: User | null;
@@ -19,8 +19,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let unsubscribe = () => {};
     try {
-      const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
         if (firebaseUser) {
           setUser({
             id: firebaseUser.uid,
@@ -34,12 +35,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         setLoading(false);
       });
-      return () => unsubscribe();
     } catch (error) {
       console.warn('Firebase Auth unavailable. Falling back to offline mode.', error);
       setLoading(false);
-      return () => {};
     }
+    return unsubscribe;
   }, []);
 
   const login = async (email: string, mfaCode?: string) => {
@@ -57,30 +57,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-    try {
-      // Popup is convenient when the browser permits it.
-      await signInWithPopup(auth, googleProvider);
-    } catch (error: any) {
-      const code = error?.code || '';
-      // GitHub Pages/browser privacy settings can block Firebase's popup.
-      // Redirect uses the same Google provider without opening a popup.
-      if (
-        code === 'auth/popup-blocked' ||
-        code === 'auth/popup-closed-by-user' ||
-        code === 'auth/cancelled-popup-request'
-      ) {
-        try {
-          await signInWithRedirect(auth, googleProvider);
-          return;
-        } catch (redirectError: any) {
-          console.error('Google redirect sign-in failed:', redirectError);
-          throw new Error(redirectError?.message || 'Google sign-in could not be started.');
-        }
-      }
-
-      console.error('Google sign-in failed:', error);
-      throw new Error(error?.message || 'Google sign-in could not be completed.');
-    }
+    // Use redirect instead of a popup. This avoids Chrome popup blocking on
+    // GitHub Pages and lets Firebase return to the same deployed application.
+    await signInWithRedirect(auth, googleProvider);
   };
 
   const logout = async () => {
