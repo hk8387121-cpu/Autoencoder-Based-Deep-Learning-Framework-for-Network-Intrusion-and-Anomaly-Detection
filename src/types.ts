@@ -13,8 +13,11 @@ export interface AnomalyAlert {
   destinationIP: string;
   protocol: string;
   reconstructionError: number;
+  threshold?: number;
+  confidenceScore?: number;
   severity: 'Low' | 'Medium' | 'High' | 'Critical';
   status: 'New' | 'Investigating' | 'Resolved';
+  prediction?: string;
 }
 
 export interface NetworkMetric {
