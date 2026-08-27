@@ -6,3 +6,16 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Generated ML artifacts
+backend/models/
+*.h5
+*.keras
+*.pkl
